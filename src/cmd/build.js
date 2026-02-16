@@ -5,9 +5,9 @@ import fs from 'fs/promises';
 import parseJSON from 'parse-json';
 import stripBom from 'strip-bom';
 import defaultFromEvent from 'promise-toolbox/fromEvent';
-import zipDir from 'zip-dir';
 
 import defaultSourceWatcher from '../watcher.js';
+import { zipDir } from '../util/zip-dir.js';
 import getValidatedManifest, { getManifestId } from '../util/manifest.js';
 import { prepareArtifactsDir } from '../util/artifacts.js';
 import { createLogger } from '../util/logger.js';

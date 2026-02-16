@@ -62,6 +62,7 @@
     "@babel/runtime": "7.28.6",
     "@devicefarmer/adbkit": "3.3.8",
     "addons-linter": "9.7.0",
+    "async": "3.2.6",
     "camelcase": "8.0.0",
     "chrome-launcher": "1.2.0",
     "debounce": "1.2.1",
