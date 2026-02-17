@@ -48,64 +48,140 @@ export function zipDir(rootDir, options, callback) {
   return promise;
 }
 
+function collectFileStatRecursively(directory, fileStats = {}) {
+  return new Promise(function (resolve, reject) {
+    fs.readdir(directory, function (dirErr, files) {
+      if (dirErr) {
+        reject(dirErr);
+
+        return;
+      }
+
+      if (!files.length) {
+        resolve([]);
+
+        return;
+      }
+
+      Promise.all(
+        files.map(function (file) {
+          const fullPath = path.resolve(directory, file);
+
+          return new Promise(function (fileResolve) {
+            fs.stat(fullPath, function (err, stat) {
+              if (err) {
+                reject(err);
+
+                return;
+              }
+
+              fileStats[fullPath] = stat;
+
+              if (!stat.isDirectory()) {
+                fileResolve();
+
+                return;
+              }
+
+              collectFileStatRecursively(fullPath, fileStats).then(fileResolve);
+            });
+          });
+        }),
+      ).then(function () {
+        resolve(fileStats);
+      });
+    });
+  });
+}
+
+function getFilesRecursively(directory) {
+  return collectFileStatRecursively(directory).then(function (fileStats) {
+    const result = Object.keys(fileStats);
+    result.sort();
+
+    return result.map(function (fullPath) {
+      return { fullPath, stat: fileStats[fullPath] };
+    });
+  });
+}
+
 function zipBuffer(rootDir, options, callback) {
   const zip = new Zip();
   const folders = {};
   // Resolve the path so we can remove trailing slash if provided
   rootDir = path.resolve(rootDir);
 
-  folders[rootDir] = zip;
+  getFilesRecursively(rootDir)
+    .then(function (files) {
+      folders[rootDir] = zip;
 
-  dive(rootDir, function (err) {
-    if (err) {
-      return callback(err);
-    }
+      files.forEach(function ({ fullPath, stat }) {
+        if (options.filter && !options.filter(fullPath, stat)) {
+          return;
+        }
 
-    zip
-      .generateAsync({
-        compression: 'DEFLATE',
-        type: 'nodebuffer',
-      })
-      .then(function (buffer) {
-        callback(null, buffer);
-      })
-      .catch(function (error) {
-        callback(error);
+        if (stat.isDirectory()) {
+          if (options.each) {
+            options.each(fullPath);
+          }
+          folders[fullPath] = folders[path.dirname(fullPath)].folder(fullPath);
+        }
       });
-  });
 
-  function dive(dir, diveCallback) {
-    fs.readdir(dir, function (dirErr, files) {
-      if (dirErr) {
-        return diveCallback(dirErr);
-      }
-      if (!files.length) {
-        return diveCallback();
-      }
-      let count = files.length;
-      files.sort();
-      Promise.all(files.map(function (file) {
-        return new Promise(function (resolve) {
-          const fullPath = path.resolve(dir, file);
-          fs.stat(fullPath, function (err, stat) {
-            resolve({fullPath, err, stat});
+      return Promise.all(files.map(function ({ fullPath, stat }) {
+        return new Promise(function (resolve, reject) {
+          if (
+            stat.isDirectory() ||
+            (options.filter && !options.filter(fullPath, stat))
+          ) {
+            resolve();
+
+            return;
+          }
+
+          const dir = path.dirname(fullPath);
+          const file = path.basename(fullPath);
+
+          fileQueue.push({ fullPath, dir, file, date: stat.mtime }, function (error) {
+            if (error) {
+              reject(error);
+
+              return;
+            }
+
+            resolve();
           });
         });
-      })).forEach(function ({fullPath, err, stat}) {
-        addItem(fullPath, stat, err, function (error) {
-          if (!--count) {
-            diveCallback(error);
-          }
+      }));
+    })
+    .then(function () {
+      zip
+        .generateAsync({
+          compression: 'DEFLATE',
+          type: 'nodebuffer',
+        })
+        .then(function (buffer) {
+          callback(null, buffer);
+        })
+        .catch(function (error) {
+          callback(error);
         });
-      });
-    });
-  }
+    })
+    .catch(callback);
 
   const fileQueue = queue(function (task, queueCallback) {
     fs.readFile(task.fullPath, function (err, data) {
       if (options.each) {
         options.each(path.join(task.dir, task.file));
       }
+
+      if (!folders[task.dir]) {
+        // If absent, it means options.filter filtered the parent folder out
+        queueCallback();
+
+        return;
+      }
+
       folders[task.dir].file(task.file, data, {
         date: task.date,
         createFolders: false,
@@ -113,26 +189,4 @@ function zipBuffer(rootDir, options, callback) {
       queueCallback(err);
     });
   }, maxOpenFiles);
-
-  function addItem(fullPath, stat, err, cb) {
-    if (err) {
-      return cb(err);
-    }
-    if (options.filter && !options.filter(fullPath, stat)) {
-      return cb();
-    }
-    const dir = path.dirname(fullPath);
-    const file = path.basename(fullPath);
-    let parentZip;
-    if (stat.isDirectory()) {
-      parentZip = folders[dir];
-      if (options.each) {
-        options.each(fullPath);
-      }
-      folders[fullPath] = parentZip.folder(file);
-      dive(fullPath, cb);
-    } else {
-      fileQueue.push({ fullPath, dir, file, date: stat.mtime }, cb);
-    }
-  }
 }
